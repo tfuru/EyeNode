@@ -300,17 +300,51 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     }
 
     private fun processLongTextToSpeech(text: String) {
+        // エラーメッセージの場合はその旨を表示して読み上げない
+        if (text.startsWith("Error:")) {
+            addLog("通信エラーのため音声合成をスキップします")
+            return
+        }
+        if (text.startsWith("No response")) {
+            addLog("AIからの返答がないため音声合成をスキップします")
+            return
+        }
+
+        // JSON形式が混入している場合の簡易的なクリーンアップ
+        var cleanedText = text
+            .replace(Regex("^\\{.*\"content\":\\s*\""), "") // JSONの開始部分を削る試み
+            .replace(Regex("\"\\s*\\}$"), "")             // JSONの終了部分を削る試み
+            .replace(Regex("\\*\\*|\\*|_|#|`"), "")        // Markdown
+            .replace(Regex("\\{.*?\\}|\\\\n"), "")         // 残った中括弧やエスケープされた改行
+            .replace(Regex("\\[.*?\\]\\(.*?\\)"), "")      // リンク
+            .trim()
+
+        if (cleanedText.isEmpty()) return
+
         viewModelScope.launch {
             // 句読点や改行で分割
-            val chunks = text.split(Regex("[。！？\n]"))
+            val chunks = cleanedText.split(Regex("[。！？\n.!?]"))
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
             
+            if (chunks.isEmpty()) {
+                audioQueue.send(null)
+                return@launch
+            }
+
             for (chunk in chunks) {
-                val fullChunk = chunk + "。" // イントネーションのために句点を戻す
+                // 対話モードが終了していたら中断
+                if (!_isContinuousDialogue.value && chunks.size > 1) {
+                    // ただし、単発の解析（dialogue=false）の場合は最後まで読む
+                }
+
+                val fullChunk = chunk + "。" 
                 val audioData = dataRepository.synthesizeSpeech(fullChunk)
                 if (audioData != null) {
                     audioQueue.send(audioData)
+                } else {
+                    Log.e("MainViewModel", "TTS synthesis failed for chunk: $chunk")
+                    addLog("音声合成に失敗しました: $chunk")
                 }
             }
             // セッション終了マーカーを送信

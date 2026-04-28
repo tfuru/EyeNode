@@ -133,7 +133,7 @@ class DefaultDataRepository : DataRepository {
   private val _voiceTriggerMode = MutableStateFlow("ALWAYS")
   override val voiceTriggerMode = _voiceTriggerMode.asStateFlow()
 
-  private val _voiceKeywords = MutableStateFlow("これ何,教えて,解析")
+  private val _voiceKeywords = MutableStateFlow("これ何,教えて,解析,これ見て,これ好き")
   override val voiceKeywords = _voiceKeywords.asStateFlow()
 
   private val _ttsServerUrl = MutableStateFlow("192.168.10.106:8080")
