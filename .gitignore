@@ -1,0 +1,17 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+screenshot/
+*.jar
+*.apk
+.env
+.env.*
+!.env.example
+.vscode/
