@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB Video Class (UVC) デバイスを対象とするフィルタ -->
+    <!-- class=239 (Misc), subclass=2, protocol=1 は典型的なUVCデバイス -->
+    <usb-device class="239" subclass="2" protocol="1" />
+    <!-- または単純にすべてのビデオデバイスを対象にする場合 -->
+    <usb-device class="14" />
+</resources>
