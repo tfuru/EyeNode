@@ -24,6 +24,11 @@ data class ModelData(val id: String)
 @Serializable
 data class ModelsResponse(val data: List<ModelData>)
 
+data class AutoAnalysisSettings(
+    val enabled: Boolean = false,
+    val interval: Int = 10
+)
+
 interface DataRepository {
   val data: Flow<List<String>>
   val serverUrl: Flow<String>
@@ -36,8 +41,7 @@ interface DataRepository {
   val ttsApiKey: Flow<String>
   val ttsSpeaker: Flow<String>
   val availableSpeakers: Flow<List<String>>
-  val autoAnalysisEnabled: Flow<Boolean>
-  val autoAnalysisInterval: Flow<Int>
+  val autoAnalysisSettings: Flow<AutoAnalysisSettings>
   
   suspend fun updateSettings(url: String, prompt: String, model: String)
   suspend fun updateVoiceSettings(mode: String, keywords: String)
@@ -144,11 +148,8 @@ class DefaultDataRepository : DataRepository {
   private val _availableSpeakers = MutableStateFlow<List<String>>(emptyList())
   override val availableSpeakers = _availableSpeakers.asStateFlow()
 
-  private val _autoAnalysisEnabled = MutableStateFlow(false)
-  override val autoAnalysisEnabled = _autoAnalysisEnabled.asStateFlow()
-
-  private val _autoAnalysisInterval = MutableStateFlow(10)
-  override val autoAnalysisInterval = _autoAnalysisInterval.asStateFlow()
+  private val _autoAnalysisSettings = MutableStateFlow(AutoAnalysisSettings(enabled = false, interval = 10))
+  override val autoAnalysisSettings = _autoAnalysisSettings.asStateFlow()
 
   private val speakerIdMap = mutableMapOf<String, Int>()
 
@@ -192,8 +193,8 @@ class DefaultDataRepository : DataRepository {
   }
 
   override suspend fun updateAutoAnalysisSettings(enabled: Boolean, interval: Int) {
-    _autoAnalysisEnabled.value = enabled
-    _autoAnalysisInterval.value = interval
+    Log.d("DataRepository", "Updating auto analysis: enabled=$enabled, interval=$interval")
+    _autoAnalysisSettings.value = AutoAnalysisSettings(enabled, interval)
   }
 
   override suspend fun fetchAvailableSpeakers(url: String, apiKey: String): List<String> {

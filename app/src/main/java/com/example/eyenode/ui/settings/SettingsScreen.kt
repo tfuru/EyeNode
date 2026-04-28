@@ -20,12 +20,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.eyenode.data.DefaultDataRepository
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    viewModel: SettingsViewModel = viewModel { SettingsViewModel(DefaultDataRepository()) }
+    viewModel: SettingsViewModel
 ) {
     val serverUrl by viewModel.serverUrl.collectAsStateWithLifecycle()
     val systemPrompt by viewModel.systemPrompt.collectAsStateWithLifecycle()
@@ -406,24 +407,37 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            val coroutineScope = rememberCoroutineScope()
+            var isSaving by remember { mutableStateOf(false) }
+
             Button(
                 onClick = {
-                    viewModel.saveSettings(urlInput, promptInput, modelInput)
-                    viewModel.saveVoiceSettings(voiceModeInput, voiceKeywordsInput)
-                    viewModel.saveTtsSettings(ttsServerUrlInput, ttsApiKeyInput, ttsSpeakerInput)
-                    viewModel.saveAutoAnalysisSettings(
-                        autoAnalysisEnabledInput, 
-                        autoAnalysisIntervalInput.toIntOrNull() ?: 10
-                    )
-                    onBack()
+                    if (isSaving) return@Button
+                    isSaving = true
+                    coroutineScope.launch {
+                        viewModel.saveAllSettings(
+                            urlInput, promptInput, modelInput,
+                            voiceModeInput, voiceKeywordsInput,
+                            ttsServerUrlInput, ttsApiKeyInput, ttsSpeakerInput,
+                            autoAnalysisEnabledInput, 
+                            autoAnalysisIntervalInput.toIntOrNull() ?: 10
+                        )
+                        isSaving = false
+                        onBack()
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
                 shape = RoundedCornerShape(12.dp),
+                enabled = !isSaving,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
             ) {
-                Text("設定を保存", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                if (isSaving) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.Black)
+                } else {
+                    Text("設定を保存", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.eyenode.data.DataRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -39,35 +40,28 @@ class SettingsViewModel(private val dataRepository: DataRepository) : ViewModel(
     val availableSpeakers: StateFlow<List<String>> = dataRepository.availableSpeakers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val autoAnalysisEnabled: StateFlow<Boolean> = dataRepository.autoAnalysisEnabled
+    val autoAnalysisEnabled: StateFlow<Boolean> = dataRepository.autoAnalysisSettings
+        .map { it.enabled }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    val autoAnalysisInterval: StateFlow<Int> = dataRepository.autoAnalysisInterval
+    val autoAnalysisInterval: StateFlow<Int> = dataRepository.autoAnalysisSettings
+        .map { it.interval }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 10)
 
-    fun saveSettings(url: String, prompt: String, model: String) {
-        viewModelScope.launch {
-            dataRepository.updateSettings(url, prompt, model)
-        }
+    suspend fun saveAllSettings(
+        url: String, prompt: String, model: String,
+        voiceMode: String, voiceKeywords: String,
+        ttsUrl: String, ttsApiKey: String, ttsSpeaker: String,
+        autoEnabled: Boolean, autoInterval: Int
+    ) {
+        // すべての更新を確実に完了させる
+        dataRepository.updateSettings(url, prompt, model)
+        dataRepository.updateVoiceSettings(voiceMode, voiceKeywords)
+        dataRepository.updateTtsSettings(ttsUrl, ttsApiKey, ttsSpeaker)
+        dataRepository.updateAutoAnalysisSettings(autoEnabled, autoInterval)
     }
 
-    fun saveVoiceSettings(mode: String, keywords: String) {
-        viewModelScope.launch {
-            dataRepository.updateVoiceSettings(mode, keywords)
-        }
-    }
 
-    fun saveTtsSettings(url: String, apiKey: String, speaker: String) {
-        viewModelScope.launch {
-            dataRepository.updateTtsSettings(url, apiKey, speaker)
-        }
-    }
-
-    fun saveAutoAnalysisSettings(enabled: Boolean, interval: Int) {
-        viewModelScope.launch {
-            dataRepository.updateAutoAnalysisSettings(enabled, interval)
-        }
-    }
 
     fun refreshModels(url: String) {
         viewModelScope.launch {

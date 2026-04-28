@@ -17,6 +17,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 
+data class CaptureRequest(
+    val source: String,
+    val voiceText: String? = null,
+    val isDialogue: Boolean = false
+)
+
 class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     private val _logs = MutableStateFlow<List<String>>(listOf("システムを起動しました"))
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
@@ -33,8 +39,8 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     private val _audioLevel = MutableStateFlow(0f)
     val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
 
-    private val _captureRequested = MutableStateFlow(false)
-    val captureRequested: StateFlow<Boolean> = _captureRequested.asStateFlow()
+    private val _captureRequested = MutableStateFlow<CaptureRequest?>(null)
+    val captureRequested = _captureRequested.asStateFlow()
 
     private val _lastAnalyzedImage = MutableStateFlow<Bitmap?>(null)
     val lastAnalyzedImage: StateFlow<Bitmap?> = _lastAnalyzedImage.asStateFlow()
@@ -51,11 +57,13 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     private val _isContinuousDialogue = MutableStateFlow(false)
     val isContinuousDialogue: StateFlow<Boolean> = _isContinuousDialogue.asStateFlow()
 
+    private val _isForeground = MutableStateFlow(true)
+    val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
+
     private val _dialogueRestartRequested = MutableSharedFlow<Unit>()
     val dialogueRestartRequested = _dialogueRestartRequested.asSharedFlow()
 
-    private var lastVoiceText: String? = null
-    private var lastIsDialogue: Boolean = false
+
     private var autoAnalysisJob: Job? = null
     private var lockJob: Job? = null
     
@@ -65,14 +73,12 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     init {
         // 自動解析ループの監視
         viewModelScope.launch {
-            combine(
-                dataRepository.autoAnalysisEnabled,
-                dataRepository.autoAnalysisInterval
-            ) { enabled, interval ->
-                enabled to interval
-            }.collect { (enabled, interval) ->
-                startAutoAnalysisLoop(enabled, interval)
-            }
+            dataRepository.autoAnalysisSettings
+                .distinctUntilChanged()
+                .collect { settings ->
+                    Log.d("MainViewModel", "Auto-analysis settings changed: enabled=${settings.enabled}, interval=${settings.interval}")
+                    startAutoAnalysisLoop(settings.enabled, settings.interval)
+                }
         }
 
         // 音声再生ループの開始
@@ -80,14 +86,41 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     }
 
     private fun startAutoAnalysisLoop(enabled: Boolean, intervalSeconds: Int) {
-        autoAnalysisJob?.cancel()
+        if (autoAnalysisJob != null) {
+            Log.d("MainViewModel", "Cancelling existing auto-analysis job")
+            autoAnalysisJob?.cancel()
+        }
         if (enabled) {
+            Log.d("MainViewModel", "Starting responsive auto-analysis job with interval: $intervalSeconds s")
             autoAnalysisJob = viewModelScope.launch {
-                while (isActive) {
-                    delay(intervalSeconds * 1000L)
-                    // ロック中や対話中、または解析中は自動解析をスキップ
-                    if (!_isTriggerLocked.value && !_isContinuousDialogue.value && !_isAnalyzing.value) {
-                        _captureRequested.value = true
+                var lastAnalysisTime = 0L
+                
+                // 全てのガード条件を監視
+                combine(
+                    _isForeground,
+                    _isTriggerLocked,
+                    _isContinuousDialogue,
+                    _isAnalyzing,
+                    _isAiSpeaking
+                ) { foreground, locked, dialogue, analyzing, speaking ->
+                    foreground && !locked && !dialogue && !analyzing && !speaking
+                }.collectLatest { canAnalyze ->
+                    if (canAnalyze) {
+                        val currentTime = System.currentTimeMillis()
+                        val elapsed = currentTime - lastAnalysisTime
+                        val waitTime = (intervalSeconds * 1000L) - elapsed
+                        
+                        if (waitTime > 0) {
+                            delay(waitTime)
+                        }
+                        
+                        // ディレイ後にもう一度条件をチェック (collectLatestにより、ディレイ中に条件が変わればキャンセルされる)
+                        addLog("自動解析を実行します...")
+                        _captureRequested.value = CaptureRequest("自動解析")
+                        lastAnalysisTime = System.currentTimeMillis()
+                        
+                        // 次回まで間隔を空ける
+                        delay(intervalSeconds * 1000L)
                     }
                 }
             }
@@ -133,16 +166,19 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
         }
         lockJob?.cancel() // 古いタイマーをキャンセル
         lockJob = viewModelScope.launch {
-            playTriggerSound()
-            _isTriggerLocked.value = true
-            // 対話モードならより長いタイムアウト(デフォルト5分)を使用
-            val timeout = if (isDialogue) 300000L else durationMs
-            delay(timeout)
-            _isTriggerLocked.value = false
-            // タイムアウトでロック解除されたら連続対話も終了
-            if (isDialogue) {
-                _isContinuousDialogue.value = false
-                addLog("無音が続いたため対話モードを終了しました")
+            try {
+                playTriggerSound()
+                _isTriggerLocked.value = true
+                // 対話モードならより長いタイムアウト(デフォルト5分)を使用
+                val timeout = if (isDialogue) 300000L else durationMs
+                delay(timeout)
+            } finally {
+                _isTriggerLocked.value = false
+                // タイムアウトでロック解除されたら連続対話も終了
+                if (isDialogue) {
+                    _isContinuousDialogue.value = false
+                    addLog("無音が続いたため対話モードを終了しました")
+                }
             }
         }
     }
@@ -185,13 +221,24 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
         }
         
         playTriggerSound()
-        lastVoiceText = voiceText
-        lastIsDialogue = isDialogue
-        _captureRequested.value = true
+        _captureRequested.value = CaptureRequest(
+            source = if (isDialogue) "対話リクエスト" else "音声トリガー",
+            voiceText = voiceText,
+            isDialogue = isDialogue
+        )
     }
 
     fun onCaptureCompleted() {
-        _captureRequested.value = false
+        _captureRequested.value = null
+    }
+
+    fun setIsForeground(foreground: Boolean) {
+        _isForeground.value = foreground
+        if (foreground) {
+            Log.d("MainViewModel", "App returned to foreground")
+        } else {
+            Log.d("MainViewModel", "App moved to background")
+        }
     }
 
     fun updateAudioLevel(level: Float) {
@@ -200,22 +247,20 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
 
     fun analyzeImage(
         bitmap: Bitmap, 
-        position: com.example.eyenode.ai.HandGestureDetector.FingerPosition? = null
+        position: com.example.eyenode.ai.HandGestureDetector.FingerPosition? = null,
+        voiceText: String? = null,
+        isDialogue: Boolean = false,
+        source: String = "不明"
     ) {
-        val voiceText = lastVoiceText
-        val isDialogue = lastIsDialogue
-        lastVoiceText = null // Clear for next trigger
-        lastIsDialogue = false
-        
         _lastAnalyzedImage.value = bitmap
-
+        
         if (position != null) {
             addLog("指差しを検知しました")
             playTriggerSound()
         } else if (isDialogue) {
             addLog("対話（日常会話）を開始します...")
         } else if (voiceText == null) {
-            addLog("自動解析を実行中...")
+            addLog("自動解析を実行中（$source）...")
         }
 
         viewModelScope.launch {

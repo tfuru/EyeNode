@@ -47,8 +47,8 @@ import com.example.eyenode.ui.CameraPreview
 
 @Composable
 fun MainScreen(
-    onItemClick: (NavKey) -> Unit,
-    viewModel: MainScreenViewModel = viewModel { MainScreenViewModel(DefaultDataRepository()) },
+    onItemClick: (androidx.navigation3.runtime.NavKey) -> Unit,
+    viewModel: MainScreenViewModel,
     modifier: Modifier = Modifier
 ) {
   var hasCameraPermission by remember { mutableStateOf(false) }
@@ -110,10 +110,16 @@ fun MainScreen(
       }
   }
 
-  DisposableEffect(Unit) {
-      onDispose {
-          voiceHandler.release()
-      }
+  val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+  DisposableEffect(lifecycleOwner) {
+    val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+      viewModel.setIsForeground(event == androidx.lifecycle.Lifecycle.Event.ON_RESUME)
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      voiceHandler.release()
+    }
   }
 
   LaunchedEffect(Unit) {
@@ -139,7 +145,7 @@ fun MainScreen(
             isAnalyzing = isAnalyzing,
             isContinuousDialogue = isContinuousDialogue,
             onLog = { viewModel.addLog(it) },
-            onAnalyze = { bitmap, pos -> viewModel.analyzeImage(bitmap, pos) },
+            onAnalyze = { bitmap, pos, vText, isDial, source -> viewModel.analyzeImage(bitmap, pos, vText, isDial, source) },
             onFist = { viewModel.stopContinuousDialogue() },
             onThumbsUp = { 
                 voiceHandler.startDialogue()
@@ -165,13 +171,13 @@ internal fun MainScreen(
     logs: List<String>,
     voiceTriggerMode: String,
     audioLevel: Float,
-    captureRequested: Boolean,
+    captureRequested: com.example.eyenode.ui.main.CaptureRequest?,
     lastAnalyzedImage: Bitmap?,
     isTriggerLocked: Boolean,
     isAnalyzing: Boolean,
     isContinuousDialogue: Boolean,
     onLog: (String) -> Unit,
-    onAnalyze: (Bitmap, com.example.eyenode.ai.HandGestureDetector.FingerPosition?) -> Unit,
+    onAnalyze: (Bitmap, com.example.eyenode.ai.HandGestureDetector.FingerPosition?, String?, Boolean, String) -> Unit,
     onFist: () -> Unit,
     onThumbsUp: () -> Unit,
     onCaptureCompleted: () -> Unit,
@@ -215,7 +221,7 @@ internal fun MainScreen(
         ) {
             CameraPreview(
                 modifier = Modifier.fillMaxSize(),
-                captureRequested = captureRequested,
+                captureRequested = captureRequested != null,
                 onCaptureCompleted = onCaptureCompleted,
                 onCameraStateChanged = { connected ->
                     isCameraConnected = connected
@@ -240,7 +246,10 @@ internal fun MainScreen(
                     if (gesture == HandGestureDetector.Gesture.PHONE_CALL) {
                         onThumbsUp()
                     } else {
-                        onAnalyze(bitmap, pos)
+                        val sourceName = if (gesture == HandGestureDetector.Gesture.NONE) (captureRequested?.source ?: "外部") else "ジェスチャー"
+                        val vText = if (gesture == HandGestureDetector.Gesture.NONE) captureRequested?.voiceText else null
+                        val isDial = if (gesture == HandGestureDetector.Gesture.NONE) (captureRequested?.isDialogue ?: false) else false
+                        onAnalyze(bitmap, pos, vText, isDial, sourceName)
                     }
                 },
                 onHandDetected = { isHandDetected = it }
@@ -374,6 +383,43 @@ internal fun MainScreen(
                             modifier = Modifier.size(20.dp)
                         )
                     }
+
+                    // AI解析中インジケーター
+                    if (isAnalyzing) {
+                        Box(contentAlignment = Alignment.Center) {
+                            // 回転するボーダー（ローディング演出）
+                            val infiniteTransition = rememberInfiniteTransition(label = "rotating_ai")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(2000, easing = LinearEasing)
+                                ),
+                                label = "rotation"
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .graphicsLayer { rotationZ = rotation }
+                                    .border(2.dp, Color(0xFF00E5FF), CircleShape)
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .background(Color(0xFF00E5FF).copy(alpha = 0.2f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "AI",
+                                    color = Color(0xFF00E5FF),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -462,13 +508,13 @@ fun MainScreenPreview() {
         logs = listOf("Test log 1", "Test log 2"),
         voiceTriggerMode = "ALWAYS",
         audioLevel = 0.5f,
-        captureRequested = false,
+        captureRequested = null,
         lastAnalyzedImage = null,
         isTriggerLocked = false,
         isAnalyzing = false,
         isContinuousDialogue = false,
         onLog = {},
-        onAnalyze = { bitmap: android.graphics.Bitmap, pos: com.example.eyenode.ai.HandGestureDetector.FingerPosition? -> },
+        onAnalyze = { _: android.graphics.Bitmap, _: com.example.eyenode.ai.HandGestureDetector.FingerPosition?, _: String?, _: Boolean, _: String -> },
         onFist = {},
         onThumbsUp = {},
         onCaptureCompleted = {},
@@ -486,13 +532,13 @@ fun MainScreenPortraitPreview() {
         logs = listOf("Test log 1", "Test log 2"),
         voiceTriggerMode = "TAP",
         audioLevel = 0.1f,
-        captureRequested = false,
+        captureRequested = null,
         lastAnalyzedImage = null,
         isTriggerLocked = false,
         isAnalyzing = false,
         isContinuousDialogue = false,
         onLog = {},
-        onAnalyze = { bitmap: android.graphics.Bitmap, pos: com.example.eyenode.ai.HandGestureDetector.FingerPosition? -> },
+        onAnalyze = { _: android.graphics.Bitmap, _: com.example.eyenode.ai.HandGestureDetector.FingerPosition?, _: String?, _: Boolean, _: String -> },
         onFist = {},
         onThumbsUp = {},
         onCaptureCompleted = {},
