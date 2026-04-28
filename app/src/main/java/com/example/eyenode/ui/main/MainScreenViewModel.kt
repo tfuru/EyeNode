@@ -66,6 +66,7 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
 
     private var autoAnalysisJob: Job? = null
     private var lockJob: Job? = null
+    private var playbackJob: Job? = null
     
     // 音声再生用のキュー (nullは発話セッションの終了マーカー)
     private val audioQueue = Channel<ByteArray?>(Channel.UNLIMITED)
@@ -130,7 +131,8 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     private val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
 
     private fun startPlaybackLoop() {
-        viewModelScope.launch {
+        playbackJob?.cancel()
+        playbackJob = viewModelScope.launch {
             for (audioData in audioQueue) {
                 if (audioData == null) {
                     // 発話セッション終了。
@@ -140,6 +142,7 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
                         lockTriggers(300000L, true)
                         _dialogueRestartRequested.emit(Unit)
                     }
+                    if (!_isContinuousDialogue.value) break // 対話終了なら再生ループも抜ける
                     continue
                 }
                 
@@ -147,9 +150,19 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
                 playAudio(audioData)
                 // 各チャンクの間は少しだけフラグを維持してマイクが即座に開かないようにする
             }
-            // チャンネルがクローズされた場合など
+            // キューに残っているデータをクリア
+            while (audioQueue.tryReceive().isSuccess) { /* empty */ }
             _isAiSpeaking.value = false
         }
+    }
+
+    fun stopAiSpeaking() {
+        _isAiSpeaking.value = false
+        playbackJob?.cancel() // 現在の再生を即座に中断
+        // チャンネルの中身を空にする
+        while (audioQueue.tryReceive().isSuccess) { /* empty */ }
+        addLog("AIの発話を中断しました")
+        startPlaybackLoop() // ループを再起動して次の発話に備える
     }
 
     private fun playTriggerSound() {
@@ -174,8 +187,8 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
                 delay(timeout)
             } finally {
                 _isTriggerLocked.value = false
-                // タイムアウトでロック解除されたら連続対話も終了
-                if (isDialogue) {
+                // 本当にタイムアウト（キャンセルされずに終了）した場合のみ
+                if (isDialogue && this.isActive) {
                     _isContinuousDialogue.value = false
                     addLog("無音が続いたため対話モードを終了しました")
                 }
@@ -184,10 +197,12 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
     }
 
     fun stopContinuousDialogue() {
+        addLog("対話モードの終了リクエストを受理しました")
         playTriggerSound() // 終了音を鳴らす
+        stopAiSpeaking() // AIの発話を止める
         _isContinuousDialogue.value = false
         unlockTriggers()
-        addLog("対話モードを終了しました")
+        addLog("対話モードを完全に終了しました")
     }
 
     fun unlockTriggers() {
@@ -205,8 +220,10 @@ class MainScreenViewModel(val dataRepository: DataRepository) : ViewModel() {
 
     fun requestCapture(voiceText: String? = null, isDialogue: Boolean = false) {
         if (isDialogue && voiceText != null) {
-            val endKeywords = listOf("対話終了", "対話終わり", "おしまい", "バイバイ", "さようなら")
-            if (endKeywords.any { voiceText.contains(it) }) {
+            val normalizedText = voiceText.trim().replace(Regex("[。？！]"), "")
+            val endKeywords = listOf("対話終了", "対話終わり", "おしまい", "バイバイ", "さようなら", "終了", "ストップ", "さよなら")
+            if (endKeywords.any { normalizedText.contains(it) }) {
+                addLog("終了キーワードを検知（$normalizedText）: 対話モードを終了します")
                 stopContinuousDialogue()
                 return
             }

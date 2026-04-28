@@ -105,6 +105,7 @@ fun MainScreen(
 
   // 対話モード終了時の状態同期
   LaunchedEffect(isContinuousDialogue) {
+      viewModel.addLog("UI: 対話モード表示状態が ${if(isContinuousDialogue) "ON" else "OFF"} になりました")
       if (!isContinuousDialogue) {
           voiceHandler.stopDialogueMode()
       }
@@ -234,6 +235,7 @@ internal fun MainScreen(
                 onPoint = { bitmap, pos, gesture -> 
                     // グーはロックに関わらず最優先
                     if (gesture == HandGestureDetector.Gesture.FIST) {
+                        onLog("ジェスチャー（グー）を検知しました: 対話終了を試みます")
                         onFist()
                         return@CameraPreview
                     }
